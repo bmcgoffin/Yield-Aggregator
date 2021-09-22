@@ -1475,12 +1475,12 @@
     "1": {
       "events": {},
       "links": {},
-      "address": "0xA0AbFc21CaAFCBc7F81CEB6a7442816D5A3Ca0F0",
-      "transactionHash": "0x8d478da060f94fce6dab7d0f040d5a6f24add2a54fdcd6bb4bef28876cfa0de4"
+      "address": "0xcc29aefB3c22a02a9CbcB285bC745D2a34C7ddb6",
+      "transactionHash": "0xc6b621fdee45bbc24f39ee8f11c30006b583a9965cbc228df0298ce47d1774ec"
     }
   },
   "schemaVersion": "3.4.1",
-  "updatedAt": "2021-09-21T05:27:44.567Z",
+  "updatedAt": "2021-09-22T06:45:28.674Z",
   "networkType": "ethereum",
   "devdoc": {
     "methods": {}
