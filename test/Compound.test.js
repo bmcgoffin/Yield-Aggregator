@@ -124,16 +124,6 @@ require('chai')
               console.log('DAI User balance after withdrawl', userDAIBalance)
               console.log('DAI Contract balance after withdrawl', contractDAIBalance)
             })
-              /*
-            it('Tracks new Compound amount', async () => {
-
-              newCompoundAmount = await compoundCDaiContract.methods.balanceOf(yieldAggregator.address).call()
-              let newInt = parseInt(newCompoundAmount)
-              let previousInt = parseInt(currentcDAIBalance)
-              console.log('Amount of cDAI returned by Compound', newCompoundAmount)
-              newInt.should.be.above(previousInt)
-            })
-            */
           })
     })
 })
