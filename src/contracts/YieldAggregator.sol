@@ -1,8 +1,10 @@
 pragma solidity ^0.5.16;
+pragma experimental ABIEncoderV2;
 
 import {IERC20} from "./dependencies/OpenZeppelin/IERC20.sol";
 import {cDAI} from "./dependencies/cDAI.sol"; 
 import {ILendingPool} from "./dependencies/AAVE/ILendingPool.sol";
+import {DataTypes} from './dependencies/AAVE/DataTypes.sol';
 //import {ProtocolData} from "./dependencies/AAVE/AaveProtocolDataProvider.sol";
 //import {ILendingPoolAddressesProvider} from "./dependencies/AAVE/ILendingPoolAddressesProvider";
 import "./dependencies/OpenZeppelin/SafeMath.sol";
@@ -29,11 +31,20 @@ contract YieldAggregator {
     mapping(uint256 => _Deposit) public deposits;
     mapping(address => uint256) public daiTokens;
     mapping(uint256 => bool) public depositWithdrawn;
+    //True == Compound and False == AAVE
+    mapping(uint256 => bool) public depositLocation;
     uint256 public depositCount;
 
     //Contract Events
     event Deposited(
         uint256 id,
+        address user,
+        address token,
+        uint256 amount,
+        uint256 timestamp
+    );
+
+    event Rebalanced(
         address user,
         address token,
         uint256 amount,
@@ -61,71 +72,110 @@ contract YieldAggregator {
 
     //Contract Functions
     function deposit(uint _amount) public returns (bool) {
-                
         //Create new Deposit and transfer the funds from the user account to the Smart Contract
         depositCount = depositCount.add(1);
-        deposits[depositCount] = _Deposit(depositCount, msg.sender, AAVEAddress, _amount, 0, now);
+        
         DAI.transferFrom(msg.sender, address(this), _amount);
         
         //Add amount deposited to the daiToken tracker for each user
         daiTokens[msg.sender] = daiTokens[msg.sender].add(_amount);
 
         //Get Compound and AAVE Rates
-        uint cDaiRate = Compound.exchangeRateCurrent();
-        uint aaveDaiRate = AAVE.getReserveNormalizedIncome(DAIAddress);
+        uint256 compoundAPY = getCompoundAPY();
+        uint256 aaveAPY = getAAVEAPY();
 
-        //Deposit to Compound
-        //bool deposited = depositToCompound(_amount);
-        bool AAVEDeposited = depositToAAVE(_amount);
+        if (compoundAPY > aaveAPY) {
+            depositToCompound(_amount);
+            depositLocation[depositCount] = true;
+            deposits[depositCount] = _Deposit(depositCount, msg.sender, cDAIAddress, _amount, 0, now);
+            emit Deposited(depositCount, msg.sender, cDAIAddress, _amount, now);
+        }
+        else
+        {
+            depositToAAVE(_amount);
+            depositLocation[depositCount] = false;
+            deposits[depositCount] = _Deposit(depositCount, msg.sender, AAVEAddress, _amount, 0, now);
+            emit Deposited(depositCount, msg.sender, AAVEAddress, _amount, now);
+        }
 
-        //Emit deposit event
-        emit Deposited(depositCount, msg.sender, AAVEAddress, _amount, now);
-        return true;
-        
+        return true;                    
     }
 
-    function rebalance() public {
-        // Insert Code here
+    function rebalance(uint256 id) public {
+        
+        //Get Compound and AAVE Rates
+        uint256 compoundAPY = getCompoundAPY();
+        uint256 aaveAPY = getAAVEAPY();
+
+        if (compoundAPY > aaveAPY && depositLocation[id] != true) {
+            withdrawFromAAVE();
+            calcGains();
+            depositToCompound(daiTokens[msg.sender]);
+            depositLocation[id] = true;
+            emit Rebalanced(msg.sender, cDAIAddress, daiTokens[msg.sender], now);
+        }
+        else
+        {   
+            withdrawFromCompound(false);
+            calcGains();
+            depositToAAVE(daiTokens[msg.sender]);
+            depositLocation[id] = false;
+            emit Rebalanced(msg.sender, AAVEAddress, daiTokens[msg.sender], now);
+        }
     }
 
     function withdraw(uint256 _id) public {
-
         //Get initial deposit amount and current user balance
         _Deposit storage _deposit = deposits[_id];
+                
+        //Withdraw from AAVE or Compound contract
+        if(depositLocation[_deposit.id] == true)
+        {
+            withdrawFromCompound(true);
+        }
+        else
+        {
+            withdrawFromAAVE();
+        }
         
-        //Get current cDAI locked in Compound by this contract
-        uint256 cDaiAmount = Compound.balanceOf(address(this));
-        uint256 aDaiAmount = aDAI.balanceOf(address(this));
-        
-        //Withdraw from contract
-        //withdrawFromCompound(cDaiAmount, true);
-        //withdrawFromAAVE(aDaiAmount);
-        AAVE.withdraw(DAIAddress, _deposit.amount, address(this));
+        calcGains();
+        _deposit.gain = daiTokens[msg.sender].sub(_deposit.amount);
 
-        uint256 daiAmount = DAI.balanceOf(address(this));
-
-        //Calculate gains while locked in contract
-        uint256 gain = daiAmount.sub(_deposit.amount);
-        _deposit.gain = gain;
-        daiTokens[msg.sender] = daiTokens[msg.sender].add(gain);
-        
         //Get latest amount after gains added
         uint256 userBalance = daiTokens[msg.sender];
+ 
+        //Update trackers to account for funds withdrawn  
+        daiTokens[msg.sender] = daiTokens[msg.sender].sub(userBalance);
+        depositWithdrawn[_deposit.id] = true;
+
         //Transfer back to original account (principal plus gains)
         DAI.transfer(_deposit.user, userBalance);
 
-        //Update trackers to account for funds withdrawn  
-        daiTokens[msg.sender] = daiTokens[msg.sender].sub(_deposit.amount);
-        depositWithdrawn[_deposit.id] = true;
-
         //Emit withdrawn event
-        emit Withdrawn(_deposit.id, msg.sender, _deposit.token, _deposit.amount, gain, now);
+        emit Withdrawn(_deposit.id, msg.sender, _deposit.token, _deposit.amount, _deposit.gain, now);
+
+    }
+
+    function calcGains() private {
         
-        //Add in any gains from different rebalance
+        //Get DAI balance of contract after withdraw from AAVE/Compound
+        uint256 daiAmount = DAI.balanceOf(address(this));
 
-        //With draw funds from Compound or Aave
-        //withdrawFromCompound(userBalance, false);
+        //Calculate gains while locked in contract
+        uint256 gain = daiTokens[msg.sender].sub(daiAmount);
 
+        //Add in new gains to running total
+        daiTokens[msg.sender] = daiTokens[msg.sender].add(gain);
+    }
+
+    function getAAVEAPY() private view returns (uint256) {
+        uint256 percentDepositAPY;
+        uint256 RAY = 10^27;
+    
+        DataTypes.ReserveData memory aaveReserveData = AAVE.getReserveData(DAIAddress);
+        percentDepositAPY = 100 * aaveReserveData.currentLiquidityRate / RAY;
+
+        return percentDepositAPY;
     }
 
     function depositToAAVE(uint256 _amount) private returns (bool) {
@@ -135,30 +185,44 @@ contract YieldAggregator {
         return true;
     }
 
-    function withdrawFromAAVE(uint256 _amount) private returns (bool) {
-        AAVE.withdraw(DAIAddress, _amount, address(this));
+    function withdrawFromAAVE() private returns (bool) {
+        //Use Max to pull out all funds
+        uint256 MAX_INT = 2**256 - 1;
+        AAVE.withdraw(DAIAddress, MAX_INT, address(this));
 
         return true;
+    }
+
+    function getCompoundAPY() private returns (uint256) {
+        uint256 ethMantissa = 1e18;
+        uint256 blocksPerDay = 6570; // 13.15 seconds per block
+        uint256 daysPerYear = 365;
+        uint256 supplyRatePerBlock;
+        uint256 supplyAPY;
+
+        supplyRatePerBlock = Compound.supplyRatePerBlock();
+        supplyAPY = ((((supplyRatePerBlock / ethMantissa * blocksPerDay) + 1) ** daysPerYear) -1) * 100;
+
+        return supplyAPY;
     }
 
     function depositToCompound(uint256 _amount) public returns (bool) {       
-        //Mint cTokens
         DAI.approve(cDAIAddress, _amount);
-        uint mintResult = Compound.mint(_amount);
+        Compound.mint(_amount);
 
         return true;
     }
 
-    function withdrawFromCompound(uint256 _numTokensToWithdraw, bool redeemType) public returns (bool) {
-        uint256 redeemResult;
+    function withdrawFromCompound(bool redeemType) public returns (bool) {
+
+        uint256 cDaiAmount = Compound.balanceOf(address(this));
 
         if (redeemType == true){
-            //Retrieve DAI deposited
-            redeemResult = Compound.redeem(_numTokensToWithdraw);
+            Compound.redeem(cDaiAmount);
         }
         else
         {
-            redeemResult = Compound.redeemUnderlying(_numTokensToWithdraw);
+            Compound.redeemUnderlying(cDaiAmount);
         }
 
         return true;
