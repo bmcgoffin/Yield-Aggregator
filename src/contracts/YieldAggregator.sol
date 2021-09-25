@@ -114,7 +114,7 @@ contract YieldAggregator {
             depositLocation[id] = true;
             emit Rebalanced(msg.sender, cDAIAddress, daiTokens[msg.sender], now);
         }
-        else
+        if (aaveAPY > compoundAPY && depositLocation[id] != false)
         {   
             withdrawFromCompound(false);
             calcGains();
@@ -162,7 +162,7 @@ contract YieldAggregator {
         uint256 daiAmount = DAI.balanceOf(address(this));
 
         //Calculate gains while locked in contract
-        uint256 gain = daiTokens[msg.sender].sub(daiAmount);
+        uint256 gain = (daiAmount).sub(daiTokens[msg.sender]);
 
         //Add in new gains to running total
         daiTokens[msg.sender] = daiTokens[msg.sender].add(gain);

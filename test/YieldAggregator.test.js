@@ -13,6 +13,10 @@ require('chai')
         let daiContract
         let compoundCDaiContract
         let AAVEContract
+        let aaveAPY
+        let compoundAPY
+        let _depositLocation
+        let event
 
         let amount = web3.utils.toWei('1', 'Ether');
 
@@ -37,13 +41,13 @@ require('chai')
         AAVEContract = await new web3.eth.Contract(AAVE_ABI, AAVEContractAddress);
     })
 
-    describe('Verify DAI Access, Transfer, and Approval', () => {
+    describe('Get APY for each', () => {
       it('Gets AAVE Rate', async () => {
         let RAY = 10^27
     
         let aaveReserveData = await AAVEContract.methods.getReserveData(daiMainNetAddress).call()
-        let percentDepositAPY = 100 * aaveReserveData[3]
-        console.log(aaveReserveData[3], 'Percent APY', percentDepositAPY);
+        let aaveAPY = 100 * aaveReserveData[3]
+        console.log('Percent APY', aaveAPY);
         //balanceOf.toString().should.equal(amount, 'first transfer is correct')
       })
       it('Gets Compound Rate', async () => {
@@ -52,9 +56,83 @@ require('chai')
         const daysPerYear = 365;
 
         const supplyRatePerBlock = await compoundCDaiContract.methods.supplyRatePerBlock().call();
-        const supplyAPY = (((Math.pow((supplyRatePerBlock / ethMantissa * blocksPerDay) + 1, daysPerYear))) - 1) * 100;
-        console.log(supplyAPY);
+        const compoundAPY = (((Math.pow((supplyRatePerBlock / ethMantissa * blocksPerDay) + 1, daysPerYear))) - 1) * 100;
+        console.log('Compound Rate: ', compoundAPY);
         //allowanceAmount.toString().should.equal(allowanceAmount, 'Allowance is correct')
       })
     })
+
+    describe('Correctly deposits', () => {
+        before(async () => {
+            let transferred = await daiContract.methods.transfer(account1, amount).send({from: daiWhale})           
+            let approval = await daiContract.methods.approve(yieldAggregator.address, amount).send({from: account1})
+            let result = await yieldAggregator.deposit(amount, {from: account1})
+            const log = result.logs[0]
+            event = log.args
+            _depositLocation =  await yieldAggregator.depositLocation(event.id)
+        })
+
+        if(_depositLocation == true)
+        {
+            console.log('Deposit went to Compound')
+        }
+        else
+        {
+            console.log('Deposit went to AAVE')
+        }
+        if(compoundAPY > aaveAPY)
+        {
+            describe('Checks if Compound was correctly deposited', () => {
+                it('Checks depositLocation is true for Compound', async () => {
+                    _depositLocation = await yieldAggregator.depositLocation([event.id]);
+                    _depositLocation.should.be.true;
+                })
+            })
+            console.log('Compound is greater and should be used');
+        }
+        else
+        {
+            describe('Checks if AAVE was correctly deposited', () => {
+                it('Checks depositLocation is false for AAVE', async () => {
+                    _depositLocation = await yieldAggregator.depositLocation([event.id]);
+                    _depositLocation.should.be.false;
+                })
+            })
+            console.log('AAVE is greater and should be used');
+        }
+    
+    })
+    describe('Correctly rebalances', () => {
+        before(async () => {
+            let rebalanceResult = await yieldAggregator.rebalance([event.id])
+        })
+
+        if(compoundAPY > aaveAPY && _depositLocation != true)
+        {
+            console.log('Compound is greater and should be used for rebalance');
+            describe('Checks if Compound was correctly deposited', () => {
+                it('Checks depositLocation is true for Compound', async () => {
+                    _depositLocation = await yieldAggregator.depositLocation([event.id]);
+                    _depositLocation.should.be.true;
+                })
+            })
+        }
+        else if(aaveAPY > compoundAPY && _depositLocation != false)
+        {
+            console.log('AAVE is greater and should be used for rebalance');
+            describe('Checks if Compound was correctly deposited', () => {
+                it('Checks depositLocation is false for AAVE', async () => {
+                    _depositLocation = await yieldAggregator.depositLocation([event.id]);
+                    _depositLocation.should.be.false;
+                })
+            })
+        }
+        else
+        {
+            describe('Verifies if deposit is already in the higher earning contract', () => {
+                console.log('Deposit is already in the best returning contract')
+            })
+        }
+    })
+    
 })
