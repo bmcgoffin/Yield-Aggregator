@@ -101,25 +101,27 @@ contract YieldAggregator {
         return true;                    
     }
 
-    function rebalance(uint256 id) public {
+    function rebalance(uint256 _id) public {
+        _Deposit storage _deposit = deposits[_id];
+        require(address(_deposit.user) == msg.sender);
         
         //Get Compound and AAVE Rates
         uint256 compoundAPY = getCompoundAPY();
         uint256 aaveAPY = getAAVEAPY();
 
-        if (compoundAPY > aaveAPY && depositLocation[id] != true) {
+        if (compoundAPY > aaveAPY && depositLocation[_id] != true) {
             withdrawFromAAVE();
             calcGains();
             depositToCompound(daiTokens[msg.sender]);
-            depositLocation[id] = true;
+            depositLocation[_id] = true;
             emit Rebalanced(msg.sender, cDAIAddress, daiTokens[msg.sender], now);
         }
-        if (aaveAPY > compoundAPY && depositLocation[id] != false)
+        if (aaveAPY > compoundAPY && depositLocation[_id] != false)
         {   
             withdrawFromCompound(false);
             calcGains();
             depositToAAVE(daiTokens[msg.sender]);
-            depositLocation[id] = false;
+            depositLocation[_id] = false;
             emit Rebalanced(msg.sender, AAVEAddress, daiTokens[msg.sender], now);
         }
     }
@@ -127,6 +129,7 @@ contract YieldAggregator {
     function withdraw(uint256 _id) public {
         //Get initial deposit amount and current user balance
         _Deposit storage _deposit = deposits[_id];
+        require(address(_deposit.user) == msg.sender);
                 
         //Withdraw from AAVE or Compound contract
         if(depositLocation[_deposit.id] == true)
